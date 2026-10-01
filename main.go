@@ -8,46 +8,57 @@ import (
 	"time"
 )
 
-// Metric represents a single data point from our applications.
+// Metric represents an observability event.
+// In observability systems (like Prometheus or Datadog), metrics have:
+// - Name: what we are measuring (e.g., "http_requests_total", "http_request_duration_ms")
+// - Type: "counter" (monotonically increasing) or "gauge" (fluctuating value)
+// - Value: the numerical measurement
+// - Tags: key-value labels for filtering (e.g., endpoint="/pay", status="500")
+// - Timestamp: when the event occurred
 type Metric struct {
-	Name      string    `json:"name"`
-	Value     float64   `json:"value"`
-	Timestamp time.Time `json:"timestamp"`
+	Name      string            `json:"name"`
+	Type      string            `json:"type"`      // "counter" or "gauge"
+	Value     float64           `json:"value"`
+	Tags      map[string]string `json:"tags"`      // Key-value metadata
+	Timestamp time.Time         `json:"timestamp"` // Defaults to time.Now() if empty
 }
 
-// main is the entry point of our Go application.
 func main() {
 	http.HandleFunc("/ingest", handleIngest)
 
-	fmt.Println("Watchtower Ingestion API starting on port 8080...")
-	err := http.ListenAndServe(":8080", nil)
-	
-	if err != nil {
+	fmt.Println("Watchtower Ingestion API listening on :8080...")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatal("Server failed to start:", err)
 	}
 }
 
-// handleIngest processes incoming metric data.
 func handleIngest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST requests are allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Create an empty Metric object to hold the incoming data
 	var m Metric
-
-	// Decode the JSON from the request body into our Metric struct
-	err := json.NewDecoder(r.Body).Decode(&m)
-	if err != nil {
-		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
 	}
 
-	// For now, print the parsed metric to the console
-	fmt.Printf("Received Metric - Name: %s, Value: %f, Time: %s\n", m.Name, m.Value, m.Timestamp)
+	// Basic validation
+	if m.Name == "" || m.Type == "" {
+		http.Error(w, "Metric 'name' and 'type' are required", http.StatusBadRequest)
+		return
+	}
 
-	// Send a success response back to the client
+	// Default timestamp to current UTC time if not supplied
+	if m.Timestamp.IsZero() {
+		m.Timestamp = time.Now().UTC()
+	}
+
+	// Log the incoming metric for visibility
+	fmt.Printf("[METRIC] %s | Type: %-7s | Value: %8.2f | Tags: %v | Time: %s\n",
+		m.Name, m.Type, m.Value, m.Tags, m.Timestamp.Format(time.RFC3339))
+
 	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, "Metric '%s' received successfully!\n", m.Name)
+	fmt.Fprintf(w, "Metric '%s' recorded\n", m.Name)
 }
