@@ -13,16 +13,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
-)
 
-// Metric matches the ingestion API format.
-type Metric struct {
-	Name      string            `json:"name"`
-	Type      string            `json:"type"` // "counter" or "gauge"
-	Value     float64           `json:"value"`
-	Tags      map[string]string `json:"tags"`
-	Timestamp time.Time         `json:"timestamp"`
-}
+	"watchtower/pkg/model"
+)
 
 // SimulatedEndpoint represents an API route with realistic behaviors.
 type SimulatedEndpoint struct {
@@ -39,7 +32,6 @@ var endpoints = []SimulatedEndpoint{
 }
 
 func main() {
-	// 1. Command-line flags for easy configuration
 	targetURL := flag.String("target", "http://localhost:8080/ingest", "Target ingestion API URL")
 	concurrency := flag.Int("users", 3, "Number of concurrent simulated users (goroutines)")
 	intervalMs := flag.Int("interval", 800, "Delay in milliseconds between requests per user")
@@ -55,7 +47,6 @@ func main() {
 	fmt.Println("   Press Ctrl+C to stop gracefully")
 	fmt.Println("==================================================")
 
-	// 2. Set up context that cancels when the user presses Ctrl+C
 	ctx, cancel := context.WithCancel(context.Background())
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -66,15 +57,12 @@ func main() {
 		cancel()
 	}()
 
-	// 3. HTTP client reused across requests (best practice in Go)
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	// 4. WaitGroup to wait for all simulated users to finish
 	var wg sync.WaitGroup
 
-	// 5. Launch a goroutine for each simulated user
 	for userID := 1; userID <= *concurrency; userID++ {
 		wg.Add(1)
 		go func(id int) {
@@ -83,7 +71,6 @@ func main() {
 		}(userID)
 	}
 
-	// Wait until all user goroutines complete
 	wg.Wait()
 	fmt.Println("All simulated users stopped.")
 }
@@ -92,19 +79,15 @@ func runSimulatedUser(ctx context.Context, userID int, targetURL string, interva
 	ticker := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
-	// Use local random generator to prevent lock contention
 	r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(userID)))
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Context canceled (Ctrl+C), exit goroutine
 			return
 		case <-ticker.C:
-			// Pick a random endpoint
 			endpoint := endpoints[r.Intn(len(endpoints))]
 
-			// Determine status code based on error rate
 			isError := r.Float64() < errorRate
 			statusCode := "200"
 			if isError {
@@ -115,16 +98,15 @@ func runSimulatedUser(ctx context.Context, userID int, targetURL string, interva
 				}
 			}
 
-			// Calculate latency with jitter and occasional latency spikes
 			latency := endpoint.BaseLatency + r.Float64()*30.0
-			if r.Float64() < 0.10 { // 10% chance of a latency spike
+			if r.Float64() < 0.10 {
 				latency += 400.0 + r.Float64()*600.0
 			}
 
 			now := time.Now().UTC()
 
 			// 1. Metric: Request counter
-			counterMetric := Metric{
+			counterMetric := model.Metric{
 				Name:      "http_requests_total",
 				Type:      "counter",
 				Value:     1.0,
@@ -137,7 +119,7 @@ func runSimulatedUser(ctx context.Context, userID int, targetURL string, interva
 			}
 
 			// 2. Metric: Latency gauge
-			latencyMetric := Metric{
+			latencyMetric := model.Metric{
 				Name:      "http_request_duration_ms",
 				Type:      "gauge",
 				Value:     latency,
@@ -148,7 +130,6 @@ func runSimulatedUser(ctx context.Context, userID int, targetURL string, interva
 				},
 			}
 
-			// Send both metrics
 			sendMetric(client, targetURL, counterMetric)
 			sendMetric(client, targetURL, latencyMetric)
 
@@ -158,7 +139,7 @@ func runSimulatedUser(ctx context.Context, userID int, targetURL string, interva
 	}
 }
 
-func sendMetric(client *http.Client, url string, m Metric) {
+func sendMetric(client *http.Client, url string, m model.Metric) {
 	payload, err := json.Marshal(m)
 	if err != nil {
 		fmt.Printf("Error marshaling metric: %v\n", err)
