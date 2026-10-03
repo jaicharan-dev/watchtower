@@ -100,6 +100,46 @@ func main() {
 		})
 	})
 
+	// Aggregate endpoint (Calculates min, max, avg, percentiles, group-by)
+	mux.HandleFunc("/aggregate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Only GET requests are allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		metricName := r.URL.Query().Get("name")
+		if metricName == "" {
+			http.Error(w, "Query parameter 'name' is required", http.StatusBadRequest)
+			return
+		}
+
+		groupBy := r.URL.Query().Get("group_by")
+		windowStr := r.URL.Query().Get("window")
+
+		var from time.Time
+		if windowStr != "" {
+			d, err := time.ParseDuration(windowStr)
+			if err != nil {
+				http.Error(w, "Invalid window duration (e.g. 1m, 5m, 1h): "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			from = time.Now().UTC().Add(-d)
+		}
+
+		aggResult, err := store.Aggregate(r.Context(), storage.AggregateOptions{
+			MetricName: metricName,
+			From:       from,
+			GroupByTag: groupBy,
+		})
+		if err != nil {
+			http.Error(w, "Aggregate error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(aggResult)
+	})
+
 	// 4. Configure HTTP Server
 	server := &http.Server{
 		Addr:    ":8080",

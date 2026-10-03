@@ -24,6 +24,9 @@ type Storage interface {
 	// Query fetches metrics matching the given criteria.
 	Query(ctx context.Context, opts QueryOptions) ([]model.Metric, error)
 
+	// Aggregate calculates summary statistics (min, max, avg, percentiles) and group-by aggregations.
+	Aggregate(ctx context.Context, opts AggregateOptions) (*AggregateResult, error)
+
 	// Close cleans up connections or resources.
 	Close() error
 }
