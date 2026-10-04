@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Watchtower — Observability Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --border: #1f2937;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent: #38bdf8;
+      --accent-subtle: #0369a1;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; }
+
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.5px; }
+    .badge { font-size: 0.75rem; padding: 4px 8px; border-radius: 9999px; font-weight: 600; text-transform: uppercase; }
+    .badge-live { background-color: rgba(16, 185, 129, 0.2); color: var(--success); border: 1px solid var(--success); }
+
+    .controls { display: flex; align-items: center; gap: 12px; }
+    select, button {
+      background: var(--card-bg); color: var(--text); border: 1px solid var(--border);
+      padding: 8px 14px; border-radius: 6px; font-size: 0.875rem; cursor: pointer; outline: none;
+    }
+    select:focus, button:focus { border-color: var(--accent); }
+
+    /* Overview Stats */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; }
+    .stat-title { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }
+    .stat-value { font-size: 1.75rem; font-weight: 700; margin-top: 6px; }
+    .stat-desc { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+
+    /* Charts Grid */
+    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 20px; margin-bottom: 24px; }
+    .chart-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+    .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .chart-title { font-size: 1rem; font-weight: 600; }
+    .chart-container { position: relative; height: 260px; width: 100%; }
+
+    /* Alerts Panel */
+    .alerts-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+    .alerts-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .alerts-list { display: flex; flex-direction: column; gap: 12px; }
+    .alert-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 18px; border-radius: 6px; background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border); transition: all 0.2s;
+    }
+    .alert-item.FIRING { border-color: rgba(239, 68, 68, 0.6); background: rgba(239, 68, 68, 0.08); box-shadow: 0 0 15px rgba(239, 68, 68, 0.15); }
+    .alert-item.PENDING { border-color: rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.05); }
+    .alert-item.OK { border-color: rgba(16, 185, 129, 0.2); }
+
+    .alert-info h4 { font-size: 0.95rem; font-weight: 600; margin-bottom: 4px; }
+    .alert-info p { font-size: 0.8rem; color: var(--text-muted); }
+    .alert-state-badge {
+      font-size: 0.75rem; font-weight: 700; padding: 6px 12px; border-radius: 4px;
+      letter-spacing: 0.5px; text-transform: uppercase;
+    }
+    .badge-FIRING { background: var(--danger); color: white; animation: pulse 2s infinite; }
+    .badge-PENDING { background: var(--warning); color: black; }
+    .badge-OK { background: rgba(16, 185, 129, 0.2); color: var(--success); border: 1px solid var(--success); }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>🔭 Watchtower</h1>
+      <span class="badge badge-live">Live</span>
+    </div>
+    <div class="controls">
+      <label for="timeWindow" style="font-size: 0.85rem; color: var(--text-muted);">Window:</label>
+      <select id="timeWindow" onchange="fetchDashboardData()">
+        <option value="1m">Last 1 minute</option>
+        <option value="2m" selected>Last 2 minutes</option>
+        <option value="5m">Last 5 minutes</option>
+        <option value="15m">Last 15 minutes</option>
+      </select>
+      <button onclick="fetchDashboardData()">🔄 Refresh</button>
+    </div>
+  </header>
+
+  <!-- Overview Stats -->
+  <section class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-title">Metrics in Store</div>
+      <div class="stat-value" id="statTotalMetrics">-</div>
+      <div class="stat-desc">Buffered & retained data points</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-title">Overall P95 Latency</div>
+      <div class="stat-value" id="statP95Latency">-</div>
+      <div class="stat-desc">Tail latency (ms) across all routes</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-title">Total Error Requests</div>
+      <div class="stat-value" id="statTotalErrors">-</div>
+      <div class="stat-desc">HTTP 500 / 503 error count</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-title">Active Alert Status</div>
+      <div class="stat-value" id="statAlertStatus">-</div>
+      <div class="stat-desc">Monitored rule health</div>
+    </div>
+  </section>
+
+  <!-- Charts -->
+  <section class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-header">
+        <h3 class="chart-title">⏱️ Latency by Endpoint (Avg vs P95)</h3>
+      </div>
+      <div class="chart-container">
+        <canvas id="latencyChart"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-header">
+        <h3 class="chart-title">🚦 Traffic by HTTP Status</h3>
+      </div>
+      <div class="chart-container">
+        <canvas id="trafficChart"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <!-- Alerts Panel -->
+  <section class="alerts-card">
+    <div class="alerts-header">
+      <h3 class="chart-title">🚨 Real-Time Alert Engine Status</h3>
+      <span style="font-size: 0.8rem; color: var(--text-muted);" id="alertLastEval">Updated just now</span>
+    </div>
+    <div class="alerts-list" id="alertsContainer">
+      <div style="color: var(--text-muted); font-size: 0.875rem;">Loading alert statuses...</div>
+    </div>
+  </section>
+
+  <script>
+    let latencyChartInstance = null;
+    let trafficChartInstance = null;
+
+    Chart.defaults.color = '#9ca3af';
+    Chart.defaults.borderColor = '#1f2937';
+
+    async function fetchDashboardData() {
+      const windowVal = document.getElementById('timeWindow').value;
+
+      try {
+        // 1. Fetch latency by endpoint
+        const latencyRes = await fetch(`/aggregate?name=http_request_duration_ms&group_by=endpoint&window=${windowVal}`);
+        const latencyData = await latencyRes.json();
+
+        // 2. Fetch traffic by status
+        const trafficRes = await fetch(`/aggregate?name=http_requests_total&group_by=status&window=${windowVal}`);
+        const trafficData = await trafficRes.json();
+
+        // 3. Fetch alert states
+        const alertRes = await fetch('/alerts');
+        const alertData = await alertRes.json();
+
+        // 4. Fetch total count
+        const queryRes = await fetch('/query?limit=1');
+        const queryData = await queryRes.json();
+
+        updateOverview(latencyData, trafficData, alertData, queryData);
+        updateLatencyChart(latencyData);
+        updateTrafficChart(trafficData);
+        updateAlerts(alertData);
+      } catch (err) {
+        console.error('Error fetching dashboard data:', err);
+      }
+    }
+
+    function updateOverview(latency, traffic, alerts, query) {
+      document.getElementById('statTotalMetrics').innerText = query.total_in_storage ? query.total_in_storage.toLocaleString() : '0';
+
+      const p95 = latency.overall && latency.overall.p95 ? latency.overall.p95.toFixed(1) + ' ms' : '0 ms';
+      document.getElementById('statP95Latency').innerText = p95;
+
+      // Errors
+      let totalErrors = 0;
+      if (traffic.groups) {
+        traffic.groups.forEach(g => {
+          if (g.group_value === '500' || g.group_value === '503') {
+            totalErrors += g.stats.sum;
+          }
+        });
+      }
+      document.getElementById('statTotalErrors').innerText = totalErrors.toLocaleString();
+
+      // Alerts count
+      let firingCount = 0;
+      if (alerts.alerts) {
+        firingCount = alerts.alerts.filter(a => a.current_state === 'FIRING').length;
+      }
+      const alertElem = document.getElementById('statAlertStatus');
+      if (firingCount > 0) {
+        alertElem.innerText = `${firingCount} FIRING`;
+        alertElem.style.color = 'var(--danger)';
+      } else {
+        alertElem.innerText = 'All Healthy';
+        alertElem.style.color = 'var(--success)';
+      }
+    }
+
+    function updateLatencyChart(data) {
+      const groups = data.groups || [];
+      const labels = groups.map(g => g.group_value);
+      const avgValues = groups.map(g => g.stats.avg);
+      const p95Values = groups.map(g => g.stats.p95);
+
+      if (latencyChartInstance) {
+        latencyChartInstance.data.labels = labels;
+        latencyChartInstance.data.datasets[0].data = avgValues;
+        latencyChartInstance.data.datasets[1].data = p95Values;
+        latencyChartInstance.update();
+      } else {
+        const ctx = document.getElementById('latencyChart').getContext('2d');
+        latencyChartInstance = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: 'Avg Latency (ms)',
+                data: avgValues,
+                backgroundColor: 'rgba(56, 189, 248, 0.6)',
+                borderColor: '#38bdf8',
+                borderWidth: 1,
+              },
+              {
+                label: 'P95 Latency (ms)',
+                data: p95Values,
+                backgroundColor: 'rgba(239, 68, 68, 0.6)',
+                borderColor: '#ef4444',
+                borderWidth: 1,
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              y: { beginAtZero: true, grid: { color: '#1f2937' } },
+              x: { grid: { display: false } }
+            }
+          }
+        });
+      }
+    }
+
+    function updateTrafficChart(data) {
+      const groups = data.groups || [];
+      const labels = groups.map(g => 'HTTP ' + g.group_value);
+      const counts = groups.map(g => g.stats.sum);
+
+      const backgroundColors = groups.map(g => {
+        if (g.group_value === '200') return 'rgba(16, 185, 129, 0.7)';
+        if (g.group_value === '500') return 'rgba(239, 68, 68, 0.7)';
+        return 'rgba(245, 158, 11, 0.7)';
+      });
+
+      if (trafficChartInstance) {
+        trafficChartInstance.data.labels = labels;
+        trafficChartInstance.data.datasets[0].data = counts;
+        trafficChartInstance.data.datasets[0].backgroundColor = backgroundColors;
+        trafficChartInstance.update();
+      } else {
+        const ctx = document.getElementById('trafficChart').getContext('2d');
+        trafficChartInstance = new Chart(ctx, {
+          type: 'doughnut',
+          data: {
+            labels: labels,
+            datasets: [{
+              data: counts,
+              backgroundColor: backgroundColors,
+              borderColor: '#111827',
+              borderWidth: 2
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { position: 'bottom' }
+            }
+          }
+        });
+      }
+    }
+
+    function updateAlerts(data) {
+      const container = document.getElementById('alertsContainer');
+      const alerts = data.alerts || [];
+
+      if (alerts.length === 0) {
+        container.innerHTML = '<div style="color: var(--text-muted);">No alert rules configured.</div>';
+        return;
+      }
+
+      container.innerHTML = alerts.map(a => {
+        const rule = a.rule;
+        const state = a.current_state;
+        const target = rule.target_group ? ` (target: ${rule.target_group})` : '';
+
+        return `
+          <div class="alert-item ${state}">
+            <div class="alert-info">
+              <h4>${rule.name}</h4>
+              <p>Metric: <code>${rule.metric_name}</code>${target} &bull; Stat: <strong>${rule.stat.toUpperCase()}</strong> ${rule.operator} ${rule.threshold}ms</p>
+              <p style="margin-top: 4px; font-size: 0.75rem; color: #6b7280;">Current: <strong>${a.current_value.toFixed(1)}ms</strong> &bull; Last eval: ${new Date(a.last_evaluated_at).toLocaleTimeString()}</p>
+            </div>
+            <div>
+              <span class="alert-state-badge badge-${state}">${state}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Initial load and periodic refresh every 3 seconds
+    fetchDashboardData();
+    setInterval(fetchDashboardData, 3000);
+  </script>
+</body>
+</html>

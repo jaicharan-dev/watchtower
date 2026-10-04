@@ -16,6 +16,7 @@ import (
 	"watchtower/pkg/batcher"
 	"watchtower/pkg/model"
 	"watchtower/pkg/storage"
+	"watchtower/pkg/web"
 )
 
 func main() {
@@ -192,6 +193,9 @@ func main() {
 		})
 	})
 
+	// Web Dashboard (Served from embedded assets at http://localhost:8080/)
+	mux.Handle("/", web.Handler())
+
 	// 4. Configure HTTP Server
 	server := &http.Server{
 		Addr:    ":8080",
@@ -204,7 +208,8 @@ func main() {
 
 	go func() {
 		fmt.Println("==================================================")
-		fmt.Println("🚀 Watchtower Ingestion API online at :8080")
+		fmt.Println("🚀 Watchtower Ingestion API & Dashboard online!")
+		fmt.Println("   📊 Dashboard:   http://localhost:8080/")
 		fmt.Println("   POST /ingest    -> Submit metrics (Buffered & Batched)")
 		fmt.Println("   GET  /query     -> View stored metrics")
 		fmt.Println("   GET  /aggregate -> Aggregated statistics (p95, avg, etc.)")
