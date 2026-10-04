@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"watchtower/pkg/alert"
 	"watchtower/pkg/batcher"
 	"watchtower/pkg/model"
 	"watchtower/pkg/storage"
@@ -31,7 +32,43 @@ func main() {
 	b := batcher.NewBatcher(batchConfig, store)
 	defer b.Stop()
 
-	// 3. Set up HTTP router
+	// 3. Initialize Alert Engine (Evaluate every 4 seconds)
+	alertEngine := alert.NewEngine(store, 4*time.Second)
+	alertEngine.RegisterNotifier(alert.NewLogNotifier())
+
+	// Register sample alert rules:
+	// Rule 1: High P95 Latency on Checkout endpoint (> 500ms for 10s)
+	alertEngine.RegisterRule(alert.Rule{
+		ID:          "alert-checkout-high-p95",
+		Name:        "High P95 Latency on Checkout",
+		MetricName:  "http_request_duration_ms",
+		GroupByTag:  "endpoint",
+		TargetGroup: "/api/checkout",
+		Stat:        "p95",
+		Operator:    ">",
+		Threshold:   500.0,
+		Window:      1 * time.Minute,
+		ForDuration: 10 * time.Second,
+	})
+
+	// Rule 2: Overall High P99 Latency (> 1000ms for 10s)
+	alertEngine.RegisterRule(alert.Rule{
+		ID:          "alert-overall-high-p99",
+		Name:        "Severe Tail Latency (P99 > 1s)",
+		MetricName:  "http_request_duration_ms",
+		Stat:        "p99",
+		Operator:    ">",
+		Threshold:   1000.0,
+		Window:      1 * time.Minute,
+		ForDuration: 10 * time.Second,
+	})
+
+	alertCtx, cancelAlerts := context.WithCancel(context.Background())
+	defer cancelAlerts()
+	alertEngine.Start(alertCtx)
+	defer alertEngine.Stop()
+
+	// 4. Set up HTTP router
 	mux := http.NewServeMux()
 
 	// Ingest endpoint (Fast, non-blocking Producer)
@@ -140,6 +177,21 @@ func main() {
 		json.NewEncoder(w).Encode(aggResult)
 	})
 
+	// Alerts endpoint (View live status of all alert rules)
+	mux.HandleFunc("/alerts", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Only GET requests are allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		states := alertEngine.GetStates()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"total_rules": len(states),
+			"alerts":      states,
+		})
+	})
+
 	// 4. Configure HTTP Server
 	server := &http.Server{
 		Addr:    ":8080",
@@ -153,8 +205,10 @@ func main() {
 	go func() {
 		fmt.Println("==================================================")
 		fmt.Println("🚀 Watchtower Ingestion API online at :8080")
-		fmt.Println("   POST /ingest -> Submit metrics (Buffered & Batched)")
-		fmt.Println("   GET  /query  -> View stored metrics")
+		fmt.Println("   POST /ingest    -> Submit metrics (Buffered & Batched)")
+		fmt.Println("   GET  /query     -> View stored metrics")
+		fmt.Println("   GET  /aggregate -> Aggregated statistics (p95, avg, etc.)")
+		fmt.Println("   GET  /alerts    -> Live Alert Engine statuses")
 		fmt.Println("==================================================")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server listen failed: %v\n", err)
