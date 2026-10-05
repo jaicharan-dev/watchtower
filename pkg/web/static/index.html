@@ -151,6 +151,17 @@
     </div>
   </section>
 
+  <!-- Statistical Anomaly Detection Panel -->
+  <section class="alerts-card" style="margin-top: 24px;">
+    <div class="alerts-header">
+      <h3 class="chart-title">⚡ Statistical Anomaly Detection (3-Sigma / Z-Score)</h3>
+      <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid #c084fc;">Auto-Baseline (2.5σ)</span>
+    </div>
+    <div class="alerts-list" id="anomalyContainer">
+      <div style="color: var(--text-muted); font-size: 0.875rem;">Calculating statistical baselines...</div>
+    </div>
+  </section>
+
   <!-- System Internals / Dogfooding Panel -->
   <section class="alerts-card" style="margin-top: 24px;">
     <div class="alerts-header">
@@ -216,14 +227,53 @@
         const internalLatencyRes = await fetch(`/aggregate?name=watchtower_internal_latency_ms&window=${windowVal}`);
         const internalLatencyData = await internalLatencyRes.json();
 
+        // 7. Fetch anomaly detection
+        const anomalyRes = await fetch(`/anomalies?name=http_request_duration_ms&group_by=endpoint&window=${windowVal}&sigma=2.5`);
+        const anomalyData = await anomalyRes.json();
+
         updateOverview(latencyData, trafficData, alertData, queryData);
         updateLatencyChart(latencyData);
         updateTrafficChart(trafficData);
         updateAlerts(alertData);
         updateInternalStats(internalData, internalLatencyData);
+        updateAnomalies(anomalyData);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
       }
+    }
+
+    function updateAnomalies(data) {
+      const container = document.getElementById('anomalyContainer');
+      const groups = data.groups || [];
+
+      if (groups.length === 0) {
+        container.innerHTML = '<div style="color: var(--text-muted); font-size: 0.875rem;">Collecting baseline traffic...</div>';
+        return;
+      }
+
+      container.innerHTML = groups.map(g => {
+        const hasAnomalies = g.anomalies && g.anomalies.length > 0;
+        const badgeClass = hasAnomalies ? 'badge-FIRING' : 'badge-OK';
+        const statusText = hasAnomalies ? `${g.anomalies.length} ANOMALIES` : 'NORMAL';
+
+        let detailHtml = `<p>Baseline Mean: <strong>${g.mean.toFixed(1)}ms</strong> &bull; StdDev (σ): <strong>±${g.std_dev.toFixed(1)}ms</strong> &bull; Dynamic Upper Limit: <strong>${g.upper_limit.toFixed(1)}ms</strong> (Sample: ${g.sample_size})</p>`;
+        if (hasAnomalies) {
+          const latest = g.anomalies[g.anomalies.length - 1];
+          detailHtml += `<p style="margin-top: 4px; color: var(--danger); font-size: 0.75rem;">⚠️ Latest Anomaly: ${latest.value.toFixed(1)}ms (${latest.z_score.toFixed(1)}σ deviation at ${new Date(latest.timestamp).toLocaleTimeString()})</p>`;
+        }
+
+        return `
+          <div class="alert-item ${hasAnomalies ? 'FIRING' : 'OK'}">
+            <div class="alert-info">
+              <h4>${g.group_value}</h4>
+              ${detailHtml}
+            </div>
+            <div>
+              <span class="alert-state-badge ${badgeClass}">${statusText}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
     }
 
     function updateInternalStats(stats, latencyData) {

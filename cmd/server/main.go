@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"watchtower/pkg/alert"
+	"watchtower/pkg/anomaly"
 	"watchtower/pkg/batcher"
 	"watchtower/pkg/middleware"
 	"watchtower/pkg/model"
@@ -195,6 +196,49 @@ func main() {
 		})
 	})
 
+	anomalyDetector := anomaly.NewDetector(store)
+
+	// Anomaly Detection endpoint (Statistical Z-Score analysis)
+	mux.HandleFunc("/anomalies", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Only GET requests are allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		metricName := r.URL.Query().Get("name")
+		if metricName == "" {
+			metricName = "http_request_duration_ms"
+		}
+		groupBy := r.URL.Query().Get("group_by")
+		if groupBy == "" {
+			groupBy = "endpoint"
+		}
+
+		windowStr := r.URL.Query().Get("window")
+		window := 5 * time.Minute
+		if windowStr != "" {
+			if d, err := time.ParseDuration(windowStr); err == nil {
+				window = d
+			}
+		}
+
+		sigma := 2.5
+		if sStr := r.URL.Query().Get("sigma"); sStr != "" {
+			if s, err := strconv.ParseFloat(sStr, 64); err == nil {
+				sigma = s
+			}
+		}
+
+		result, err := anomalyDetector.Analyze(r.Context(), metricName, groupBy, window, sigma)
+		if err != nil {
+			http.Error(w, "Anomaly analysis error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+	})
+
 	startTime := time.Now()
 
 	// Web Dashboard (Served from embedded assets at http://localhost:8080/)
@@ -234,6 +278,7 @@ func main() {
 		fmt.Println("   GET  /query         -> View stored metrics")
 		fmt.Println("   GET  /aggregate     -> Aggregated statistics (p95, avg, etc.)")
 		fmt.Println("   GET  /alerts        -> Live Alert Engine statuses")
+		fmt.Println("   GET  /anomalies     -> Statistical Anomaly Detection (Z-score)")
 		fmt.Println("   GET  /internal/stats-> Dogfooding & internal telemetry")
 		fmt.Println("==================================================")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
