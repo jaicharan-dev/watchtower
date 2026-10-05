@@ -120,3 +120,22 @@ func (b *Batcher) Stop() {
 	b.cancel()
 	b.wg.Wait()
 }
+
+// Stats returns internal health and saturation indicators (self-monitoring).
+func (b *Batcher) Stats() map[string]any {
+	qLen := len(b.queue)
+	qCap := cap(b.queue)
+	saturation := 0.0
+	if qCap > 0 {
+		saturation = (float64(qLen) / float64(qCap)) * 100.0
+	}
+
+	return map[string]any{
+		"queue_length":     qLen,
+		"queue_capacity":   qCap,
+		"queue_saturation": saturation,
+		"batch_size":       b.cfg.BatchSize,
+		"flush_interval":   b.cfg.FlushInterval.String(),
+	}
+}
+

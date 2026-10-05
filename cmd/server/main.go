@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"syscall"
 	"time"
 
 	"watchtower/pkg/alert"
 	"watchtower/pkg/batcher"
+	"watchtower/pkg/middleware"
 	"watchtower/pkg/model"
 	"watchtower/pkg/storage"
 	"watchtower/pkg/web"
@@ -193,13 +195,31 @@ func main() {
 		})
 	})
 
+	startTime := time.Now()
+
 	// Web Dashboard (Served from embedded assets at http://localhost:8080/)
 	mux.Handle("/", web.Handler())
 
-	// 4. Configure HTTP Server
+	// Internal Self-Monitoring endpoint (Dogfooding statistics)
+	mux.HandleFunc("/internal/stats", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Only GET requests are allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"uptime":            time.Since(startTime).String(),
+			"goroutines":        runtime.NumGoroutine(),
+			"storage_metrics":   store.Count(),
+			"batcher":           b.Stats(),
+		})
+	})
+
+	// 4. Configure HTTP Server with MetricsDecorator (Decorator Pattern)
 	server := &http.Server{
 		Addr:    ":8080",
-		Handler: mux,
+		Handler: middleware.MetricsDecorator(b, mux),
 	}
 
 	// 5. Handle graceful shutdown
@@ -209,11 +229,12 @@ func main() {
 	go func() {
 		fmt.Println("==================================================")
 		fmt.Println("🚀 Watchtower Ingestion API & Dashboard online!")
-		fmt.Println("   📊 Dashboard:   http://localhost:8080/")
-		fmt.Println("   POST /ingest    -> Submit metrics (Buffered & Batched)")
-		fmt.Println("   GET  /query     -> View stored metrics")
-		fmt.Println("   GET  /aggregate -> Aggregated statistics (p95, avg, etc.)")
-		fmt.Println("   GET  /alerts    -> Live Alert Engine statuses")
+		fmt.Println("   📊 Dashboard:       http://localhost:8080/")
+		fmt.Println("   POST /ingest        -> Submit metrics (Buffered & Batched)")
+		fmt.Println("   GET  /query         -> View stored metrics")
+		fmt.Println("   GET  /aggregate     -> Aggregated statistics (p95, avg, etc.)")
+		fmt.Println("   GET  /alerts        -> Live Alert Engine statuses")
+		fmt.Println("   GET  /internal/stats-> Dogfooding & internal telemetry")
 		fmt.Println("==================================================")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server listen failed: %v\n", err)

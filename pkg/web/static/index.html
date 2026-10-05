@@ -151,6 +151,36 @@
     </div>
   </section>
 
+  <!-- System Internals / Dogfooding Panel -->
+  <section class="alerts-card" style="margin-top: 24px;">
+    <div class="alerts-header">
+      <h3 class="chart-title">⚙️ Watchtower Self-Monitoring (Dogfooding)</h3>
+      <span class="badge" style="background: rgba(56, 189, 248, 0.2); color: var(--accent); border: 1px solid var(--accent);">Internal Telemetry</span>
+    </div>
+    <div class="stats-grid" style="margin-bottom: 0;">
+      <div class="stat-card" style="background: rgba(255,255,255,0.02);">
+        <div class="stat-title">Server Uptime</div>
+        <div class="stat-value" style="font-size: 1.25rem;" id="internalUptime">-</div>
+        <div class="stat-desc">Time since process start</div>
+      </div>
+      <div class="stat-card" style="background: rgba(255,255,255,0.02);">
+        <div class="stat-title">Active Goroutines</div>
+        <div class="stat-value" style="font-size: 1.25rem;" id="internalGoroutines">-</div>
+        <div class="stat-desc">Go runtime lightweight threads</div>
+      </div>
+      <div class="stat-card" style="background: rgba(255,255,255,0.02);">
+        <div class="stat-title">Batch Buffer Saturation</div>
+        <div class="stat-value" style="font-size: 1.25rem;" id="internalQueueSat">-</div>
+        <div class="stat-desc" id="internalQueueDesc">Channel capacity utilization</div>
+      </div>
+      <div class="stat-card" style="background: rgba(255,255,255,0.02);">
+        <div class="stat-title">Ingestion Overhead</div>
+        <div class="stat-value" style="font-size: 1.25rem;" id="internalOverhead">-</div>
+        <div class="stat-desc">Avg handler duration (ms)</div>
+      </div>
+    </div>
+  </section>
+
   <script>
     let latencyChartInstance = null;
     let trafficChartInstance = null;
@@ -178,12 +208,38 @@
         const queryRes = await fetch('/query?limit=1');
         const queryData = await queryRes.json();
 
+        // 5. Fetch internal dogfooding stats
+        const internalRes = await fetch('/internal/stats');
+        const internalData = await internalRes.json();
+
+        // 6. Fetch dogfooding latency
+        const internalLatencyRes = await fetch(`/aggregate?name=watchtower_internal_latency_ms&window=${windowVal}`);
+        const internalLatencyData = await internalLatencyRes.json();
+
         updateOverview(latencyData, trafficData, alertData, queryData);
         updateLatencyChart(latencyData);
         updateTrafficChart(trafficData);
         updateAlerts(alertData);
+        updateInternalStats(internalData, internalLatencyData);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
+      }
+    }
+
+    function updateInternalStats(stats, latencyData) {
+      document.getElementById('internalUptime').innerText = stats.uptime ? stats.uptime.split('.')[0] + 's' : '-';
+      document.getElementById('internalGoroutines').innerText = stats.goroutines || '-';
+
+      if (stats.batcher) {
+        const sat = stats.batcher.queue_saturation.toFixed(1);
+        document.getElementById('internalQueueSat').innerText = sat + '%';
+        document.getElementById('internalQueueDesc').innerText = `${stats.batcher.queue_length} / ${stats.batcher.queue_capacity} items in buffer`;
+      }
+
+      if (latencyData && latencyData.overall && latencyData.overall.count > 0) {
+        document.getElementById('internalOverhead').innerText = latencyData.overall.avg.toFixed(2) + ' ms';
+      } else {
+        document.getElementById('internalOverhead').innerText = '< 0.5 ms';
       }
     }
 
